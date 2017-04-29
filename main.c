@@ -61,6 +61,8 @@ struct node_info *all_columns_orig;
 struct tier_map *all_columns_sortmap;
 int **rank_col_map;
 int *iteration_per_rank;
+int **col_send_map;
+int **col_recv_map;
 
 int has_node_left(struct node_info all_nodes[]);
 
@@ -80,7 +82,7 @@ int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
 
     int rank_id, num_proc;
-    int i, j, k;
+    int i, j, k, m;
 
     //rank_id=3;
     //num_proc=4;
@@ -179,8 +181,79 @@ int main(int argc, char *argv[]) {
         }
     }*/
 
-    /******************* computation *******************/
+    /******************* construct col_send/recv_map *******************/
     int iter;
+    int recv_rank_id;
+    int **need_to_recv = (int **) malloc(sizeof(int *) * iteration);
+    for (i = 0; i < iteration; i++) {
+        need_to_recv[i] = (int *) malloc(sizeof(int) * num_proc);
+        for (j = 0; j < num_proc; j++) {
+            need_to_recv[i][j] = 0;
+        }
+    }
+
+    for (iter = 0; iter < iteration; iter++) {
+        current_node = &all_columns_orig[self_cols[iter]];
+        for (j = 0; j < current_node->dependency_count; j++) {
+            //printf("%d rank current col:%d dependency col:%d\n",rank_id,current_node->col_no,current_node->dependency_col[j]);
+            for (k = 0; k < MATRIX_SIZE; k++) {
+                if (current_node->dependency_col[j] == all_columns[k].col_no) {
+                    recv_rank_id = k % num_proc;
+                    //printf("rank %d computing %d send to rank %d\n",rank_id,current_node->col_no, send_rank_id);
+                    break;
+                }
+            }
+            if (need_to_recv[iter][recv_rank_id] == 1 || recv_rank_id == rank_id) {
+                continue;
+            }
+            need_to_recv[iter][recv_rank_id] = 1;
+            //printf("rank %d computing %d recv from rank %d\n",rank_id,current_node->col_no, recv_rank_id);
+        }
+    }
+
+    int break_flag = 0;
+    struct node_info *target_node;
+    int *send_rank_counter = (int *) malloc(sizeof(int) * iteration);
+    int **need_to_send = (int **) malloc(sizeof(int *) * iteration);
+    for (i = 0; i < iteration; i++) {
+        need_to_send[i] = (int *) malloc(sizeof(int) * MATRIX_SIZE);
+        for (j = 0; j < MATRIX_SIZE; j++) {
+            need_to_send[i][j] = -1;
+        }
+    }
+
+    for (iter = 0; iter < iteration; iter++) {
+        current_node = &all_columns_orig[self_cols[iter]];
+        for (j = 0; j < MATRIX_SIZE; j++) {
+            target_node = &all_columns_orig[j];
+            for (k = 0; k < target_node->dependency_count; k++) {
+                if (target_node->dependency_col[k] == current_node->col_no) {
+                    if (target_node->col_no % num_proc == rank_id) {
+                        break;
+                    }
+                    //printf("rand %d computing %d sent to rank %d\n",rank_id,current_node->col_no,target_node->col_no%num_proc);
+                    for (m = 0; m < send_rank_counter[iter]; m++) {
+                        if (need_to_send[iter][m] == target_node->col_no % num_proc) {
+                            break_flag = 1;
+                            break;
+                        }
+                    }
+                    if (break_flag == 1) {
+                        break_flag = 0;
+                        break;
+                    }
+                    need_to_send[iter][send_rank_counter[iter]] = target_node->col_no % num_proc;
+                    printf("rand %d computing %d sent to rank %d\n", rank_id, current_node->col_no,
+                           target_node->col_no % num_proc);
+                    send_rank_counter[iter]++;
+                }
+
+            }
+        }
+    }
+
+    /******************* computation *******************/
+    iter;
     int recv_col;
     int send_count;
     int send_rank[MATRIX_SIZE];
