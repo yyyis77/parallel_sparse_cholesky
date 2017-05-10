@@ -5,13 +5,13 @@
 //                      columns in the matrix could be computed simultaneously,
 //                      if there is no dependency between them.
 
-// The matrix is passed into the function as a parameter
+// The matrix file is passed into the function as a parameter
 // The answer can be compared to the serial algotirhm by passing in the second parameter
 // ./main <matrix.txt> <answer.txt>
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <mpi.h>
+#include <mpi/mpi.h>
 #include <math.h>
 #include <string.h>
 #include <time.h>
@@ -21,6 +21,7 @@
 double **mat_in;
 int **mat_res_verifier;
 
+// node in elimination tree
 struct node_info {
     int col_no;
     int tier_level;
@@ -28,17 +29,20 @@ struct node_info {
     int dependency_col[MATRIX_SIZE];
 };
 
+// temperory struct to speed up elimination tree simulation
 struct tier_map {
     int col_no;
     int tier_level_origin;
 };
 
+//  record destination processor of each column
 struct send_map {
     int col_no;
     int target_procs[MATRIX_SIZE];
     int target_count;
 };
 
+// global variables
 int **tiers;
 int current_tier;
 int current_tier_size;
@@ -50,7 +54,9 @@ struct tier_map *all_columns_sortmap;
 struct send_map *self_send_map;
 int **self_recv_map;
 
+// record columns need to compute in each rank
 int **rank_col_map;
+// record the number of columns need to compute in each rank
 int *iteration_per_rank;
 int rank_id, num_proc;
 
@@ -98,7 +104,7 @@ int main(int argc, char *argv[]) {
     }
     fclose(fp1);
 
-    // Read in the matrix for comparison
+    // Read in the result matrix for comparison
     fp1 = fopen(argv[2], "r");
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
@@ -115,7 +121,8 @@ int main(int argc, char *argv[]) {
     all_columns_orig = malloc(sizeof(struct node_info) * MATRIX_SIZE);
     all_columns_sortmap = malloc(sizeof(struct tier_map) * MATRIX_SIZE);
 
-    // zero_tier_size is already set here.
+    // All process perform theri own pre-processing
+	// to reduce commnication overhead
     dependency_checker(all_columns_sortmap, num_proc);
 
     // Buffer with the same size as the input matrix
@@ -383,6 +390,7 @@ int main(int argc, char *argv[]) {
     MPI_Finalize();
 }
 
+// for column j, all element below the the diagonal is modified using column k, namely:
 void cmod(double **matrix, int col_num_j, int col_num_k) {
     int i, j, k;
     j = col_num_j;
@@ -393,6 +401,7 @@ void cmod(double **matrix, int col_num_j, int col_num_k) {
     }
 }
 
+// for column j, all element below the the diagonal is divided by square root of its element on the diagonal.
 void cdiv(double **matrix, int col_num_j) {
     int i, j;
     j = col_num_j;
@@ -403,6 +412,7 @@ void cdiv(double **matrix, int col_num_j) {
     }
 }
 
+// check if all the dependency of the node is in lower levels
 int check_sat(struct node_info node, int tier) {
     int i, j, k;
     int dep_count;
@@ -427,6 +437,7 @@ int check_sat(struct node_info node, int tier) {
     return 1;
 }
 
+// build dependency information for each node
 void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
     int row_counter1;
     int col_counter1, col_counter2;
@@ -439,7 +450,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
         fill_in_temp[i] = malloc(sizeof(int) * MATRIX_SIZE);
 
 
-    for (i = 0; i < MATRIX_SIZE; i++) {
+    /*for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
             if (mat_in[i][j] == 0)
                 fill_in_temp[i][j] = 0;
@@ -457,12 +468,13 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
                 }
             }
         }
-    }
+    }*/
 
     all_columns[0].col_no = 0;
     all_columns[0].dependency_count = 0;
     all_columns[0].tier_level = -1;
 
+	// build dependency information for each node
     for (col_counter1 = 1; col_counter1 < MATRIX_SIZE; col_counter1++) {
         all_columns[col_counter1].col_no = col_counter1;
         all_columns[col_counter1].dependency_count = 0;
@@ -475,6 +487,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
         }
     }
 
+	// build dependency level zero
     j = 0;
     for (i = 0; i < MATRIX_SIZE; i++) {
         if (all_columns[i].dependency_count == 0) {
@@ -486,6 +499,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
         }
     }
 
+	// build following dependency levels, up to th threshold
     current_tier = 1;
     int threshold = (int) MATRIX_SIZE * 0.002;
     while (current_tier < threshold) {
@@ -500,6 +514,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
         current_tier++;
     }
 
+	// assign remaining nodes to higher levels, one at a level
     for (i = 0; i < MATRIX_SIZE; i++) {
         if (all_columns[i].tier_level == -1) {
             all_columns[i].tier_level = current_tier;
@@ -515,6 +530,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
         all_nodes_sortmap[i].tier_level_origin = all_columns[i].tier_level;
         all_nodes_sortmap[i].col_no = all_columns[i].col_no;
     }
+	// sort by node dependency level, ascending
     quick_sort(all_nodes_sortmap, low, high);
 
     struct node_info *temp;
@@ -528,6 +544,7 @@ void dependency_checker(struct tier_map *all_nodes_sortmap, int num_proc) {
 
 }
 
+// sort by node dependency level, ascending
 void quick_sort(struct tier_map *all_nodes_sortmap, int low, int high) {
     int pi;
     if (low < high) {
@@ -537,7 +554,7 @@ void quick_sort(struct tier_map *all_nodes_sortmap, int low, int high) {
         quick_sort(all_nodes_sortmap, pi + 1, high);
     }
 }
-
+// partition by node dependency level, used in quick sort function
 int partition(struct tier_map *all_nodes_sortmap, int low, int high) {
     int i, j;
     struct tier_map temp;
@@ -575,4 +592,3 @@ int partition(struct tier_map *all_nodes_sortmap, int low, int high) {
     return i;
 
 }
-
